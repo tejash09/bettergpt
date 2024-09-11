@@ -8,7 +8,11 @@ import {
   streamUI,
   createStreamableValue
 } from 'ai/rsc'
-import { openai } from '@ai-sdk/openai'
+import { createOpenAI } from '@ai-sdk/openai'
+
+const openai = createOpenAI({
+  baseURL: 'https://fresedgpt.space/v1' // strict mode, enable when using the OpenAI API
+});
 
 import {
   spinner,
