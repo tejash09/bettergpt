@@ -1,5 +1,33 @@
 import 'server-only'
+import { WolframAlphaClient } from '@agentic/wolfram-alpha'
+const wolframClient = new WolframAlphaClient();
+import Exa from 'exa-js'
 
+class ExaSearchTool {
+  private exa: Exa
+
+  constructor(apiKey: string) {
+    this.exa = new Exa(apiKey)
+  }
+
+  async searchWithHighlights(query: string, numResults: number = 5) {
+    const result = await this.exa.searchAndContents(query, {
+      type: 'auto',
+      highlights: true,
+      numResults: numResults,
+      summary: true
+    })
+
+    return result.results.map(item => ({
+      title: item.title,
+      url: item.url,
+      highlights: item.highlights,
+      publishedDate: item.publishedDate,
+      author: item.author,
+      summary: item.summary
+    }))
+  }
+}
 import {
   createAI,
   createStreamableUI,
@@ -11,8 +39,8 @@ import {
 import { createOpenAI } from '@ai-sdk/openai'
 
 const openai = createOpenAI({
-  baseURL: 'https://fresedgpt.space/v1' // strict mode, enable when using the OpenAI API
-});
+  baseURL: 'https://api.naga.ac/v1' // strict mode, enable when using the OpenAI API
+})
 
 import {
   spinner,
@@ -39,6 +67,65 @@ import { saveChat } from '@/app/actions'
 import { SpinnerMessage, UserMessage } from '@/components/stocks/message'
 import { Chat, Message } from '@/lib/types'
 import { auth } from '@/auth'
+interface Model {
+  name: string
+  costPerToken: number
+  avgResponseTime: number
+  complexityThreshold: number
+}
+class LLMRouter {
+  private client: OpenAI
+  private models: Model[]
+  constructor(apiKey: string) {
+    this.client = createOpenAI({
+      apiKey: apiKey,
+      baseURL: 'https://api.naga.ac/v1'
+    })
+    this.models = [
+      {
+        name: 'gpt-3.5-turbo-0125',
+        costPerToken: 0.0001,
+        avgResponseTime: 1.0,
+        complexityThreshold: 0.3
+      },
+      {
+        name: 'gpt-3.5-turbo-1106',
+        costPerToken: 0.00012,
+        avgResponseTime: 1.1,
+        complexityThreshold: 0.35
+      },
+      {
+        name: 'gpt-3.5-turbo-1106',
+        costPerToken: 0.00025,
+        avgResponseTime: 0.9,
+        complexityThreshold: 0.8
+      }
+    ]
+  }
+
+  calculateComplexity(prompt: string): number {
+    const words = prompt.split(' ')
+    const totalWords = words.length
+    const uniqueWords = new Set(words).size
+    const avgWordLength =
+      words.reduce((sum, word) => sum + word.length, 0) / totalWords
+
+    const lexicalDiversity = uniqueWords / totalWords
+    const normalizedAvgWordLength = Math.min(avgWordLength / 10, 1.0)
+
+    return lexicalDiversity * 0.5 + normalizedAvgWordLength * 0.5
+  }
+
+  selectModel(prompt: string): Model {
+    const complexity = this.calculateComplexity(prompt)
+    for (const model of this.models) {
+      if (complexity <= model.complexityThreshold) {
+        return model
+      }
+    }
+    return this.models[this.models.length - 1]
+  }
+}
 
 async function confirmPurchase(symbol: string, price: number, amount: number) {
   'use server'
@@ -130,8 +217,18 @@ async function submitUserMessage(content: string) {
   let textStream: undefined | ReturnType<typeof createStreamableValue<string>>
   let textNode: undefined | React.ReactNode
 
+  const messages = aiState.get().messages.map((message: any) => ({
+    role: message.role,
+    content: message.content,
+    name: message.name
+  }))
+  const prompt = messages.map(m => `${m.role}: ${m.content}`).join('\n')
+  const llmRouter = new LLMRouter('ng-adyLEQCrdHyqOSSVjQBoNBqdWHcG2')
+  const selectedModel = llmRouter.selectModel(prompt)
+  console.log(selectedModel)
+
   const result = await streamUI({
-    model: openai('gpt-3.5-turbo'),
+    model: openai(selectedModel.name),
     initial: <SpinnerMessage />,
     system: `\
     You are a stock trading conversation bot and you can help users buy stocks, step by step.
@@ -146,7 +243,9 @@ async function submitUserMessage(content: string) {
     If you want to show trending stocks, call \`list_stocks\`.
     If you want to show events, call \`get_events\`.
     If the user wants to sell stock, or complete another impossible task, respond that you are a demo and cannot do that.
-    
+    You can also use the \`searchWithHighlights\` tool to search the web for information related to stocks or financial news. Use this when you need to summarise a up-to-date information or details about specific companies or market trends.
+    You can also use the \`wolframAlphaQuery\` tool to perform complex calculations or get factual information.
+
     Besides that, you can also chat with users and do some calculations if needed.`,
     messages: [
       ...aiState.get().messages.map((message: any) => ({
@@ -478,7 +577,137 @@ async function submitUserMessage(content: string) {
             </BotCard>
           )
         }
+      },
+      searchWithHighlights: {
+        description: 'Search with highlights using Exa Search API.',
+        parameters: z.object({
+          query: z.string().describe(prompt)
+        }),
+        generate: async function* ({ query }) {
+          yield <BotCard>Loading search results...</BotCard>
+          const exaSearchTool = new ExaSearchTool(
+            '93db6c97-864e-4a58-8520-617b4752946c'
+          )
+
+          const results = await exaSearchTool.searchWithHighlights(query)
+
+          const toolCallId = nanoid()
+
+          aiState.done({
+            ...aiState.get(),
+            messages: [
+              ...aiState.get().messages,
+              {
+                id: nanoid(),
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'tool-call',
+                    toolName: 'searchWithHighlights',
+                    toolCallId,
+                    args: { query }
+                  }
+                ]
+              },
+              {
+                id: nanoid(),
+                role: 'tool',
+                content: [
+                  {
+                    type: 'tool-result',
+                    toolName: 'searchWithHighlights',
+                    toolCallId,
+                    result: results
+                  }
+                ]
+              }
+            ]
+          })
+
+          return (
+            <BotCard>
+              {results.map((result, index) => (
+                <div key={index}>
+                  <h3>{result.title}</h3>
+                  <p>URL: {result.url}</p>
+                  <p>Published: {result.publishedDate}</p>
+                  <p>Author: {result.author || 'Unknown'}</p>
+                  <div>
+                    Highlights:
+                    <ul>
+                      {result.highlights?.map((highlight, idx) => (
+                        <li key={idx}>{highlight}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    Summary:
+                    <ul>
+                      {result.summary}
+                    </ul>
+                  </div>
+                </div>
+              ))}
+            </BotCard>
+          )
+        }
+      },
+      wolframAlphaQuery: {
+        description: 'Query Wolfram Alpha for computational knowledge.',
+        parameters: z.object({
+          query: z.string().describe(prompt)
+        }),
+        generate: async function* ({ query }) {
+          yield <BotCard>Querying Wolfram Alpha...</BotCard>
+      
+          try {
+            const result = await wolframClient.ask(query);
+            const toolCallId = nanoid();
+      
+            aiState.done({
+              ...aiState.get(),
+              messages: [
+                ...aiState.get().messages,
+                {
+                  id: nanoid(),
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'tool-call',
+                      toolName: 'wolframAlphaQuery',
+                      toolCallId,
+                      args: { query }
+                    }
+                  ]
+                },
+                {
+                  id: nanoid(),
+                  role: 'tool',
+                  content: [
+                    {
+                      type: 'tool-result',
+                      toolName: 'wolframAlphaQuery',
+                      toolCallId,
+                      result: result
+                    }
+                  ]
+                }
+              ]
+            });
+      
+            return (
+              <BotCard>
+                <h3>Wolfram Alpha Result:</h3>
+                <p>{result}</p>
+              </BotCard>
+            );
+          } catch (error) {
+            console.error('Error querying Wolfram Alpha:', error);
+            return <BotCard>Error querying Wolfram Alpha. Please try again.</BotCard>;
+          }
+        }
       }
+      
     }
   })
 
@@ -580,6 +809,31 @@ export const getUIStateFromAIState = (aiState: Chat) => {
               <BotCard>
                 {/* @ts-expect-error */}
                 <Events props={tool.result} />
+              </BotCard>
+            ) : tool.toolName === 'searchWithHighlights' ? (
+              <BotCard>
+                {tool.result.map((result, index) => (
+                  <div key={index}>
+                    <h3>{result.title}</h3>
+                    <p>URL: {result.url}</p>
+                    <p>Published: {result.publishedDate}</p>
+                    <p>Author: {result.author || 'Unknown'}</p>
+                    <div>
+                      Highlights:
+                      <ul>
+                        {result.highlights?.map((highlight, idx) => (
+                          <li key={idx}>{highlight}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      Summary:
+                      <ul>
+                        {result.summary}
+                      </ul>
+                    </div>
+                  </div>
+                ))}
               </BotCard>
             ) : null
           })

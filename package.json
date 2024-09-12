@@ -9,6 +9,8 @@
     "format:check": "prettier --check \"{app,lib,components}**/*.{ts,tsx,mdx}\" --cache"
   },
   "dependencies": {
+    "@agentic/ai-sdk": "^7.0.0",
+    "@agentic/wolfram-alpha": "^7.0.0",
     "@ai-sdk/openai": "^0.0.53",
     "@radix-ui/react-alert-dialog": "^1.1.1",
     "@radix-ui/react-dialog": "^1.1.1",
@@ -26,6 +28,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "dotenv": "^16.4.5",
+    "exa-js": "^1.1.0",
     "framer-motion": "^11.3.30",
     "geist": "^1.3.1",
     "nanoid": "^5.0.7",
